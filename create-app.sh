@@ -4,8 +4,8 @@ trap 'e=$?; [ $e -gt 0 ] && echo "$0 exited in error $e"' EXIT
 
 
 # defaults
-DEVICE=square-watch
-MIN_SDK=2.3.1
+DEVICE=vivoactive_hr
+MIN_SDK=2.4.1
 DEVELOPER_KEY=$HOME/passwd/garmin/developer_key.der
 
 [ $# -lt 1 ] &&
@@ -22,8 +22,13 @@ CONNECTIQ_HOME=$(dirname $(which monkeyc))
 # APP PARAMS
 COMPLETE_PATH="$1"; shift
 [ $# -ge 1 ] && DEVICE="$1" && shift
-[ $# -ge 1 ] && MIN_SDK="$1" &&  shift
+[ $# -ge 1 ] && MIN_SDK="$1" && shift
 [ $# -ge 1 ] && DEVELOPER_KEY="$1" && shift
+
+# Make sure we are specifying a real device
+devlistcmd="xml sel -t -v 'monkeybrains/devices/device/@id' '$CONNECTIQ_HOME/devices.xml'"
+! eval "$devlistcmd" |grep -q ^$DEVICE$ &&
+   echo "Device '$DEVICE' not known! see: $devlistcmd" && exit 1
 
 # should create once. if app dir exists, bail.
 test -d $COMPLETE_PATH && echo "ERROR: app path already exists '$COMPLETE_PATH'" && exit 1
@@ -32,7 +37,7 @@ test -d $COMPLETE_PATH && echo "ERROR: app path already exists '$COMPLETE_PATH'"
 if [ ! -r $DEVELOPER_KEY ]; then
    echo "WARNING: no key '$DEVELOPER_KEY'; making"
    keydir="$(dirname "$DEVELOPER_KEY")"
-   keyname="$(basename "$DEVELOPER_KEY" .der)" 
+   keyname="$(basename "$DEVELOPER_KEY" .der).pem" 
    [ ! -d $keydir ] && mkdir -p $keydir
    pemkey=$keydir/$keyname
    openssl genrsa -out $pemkey 4096
@@ -64,12 +69,17 @@ mv $COMPLETE_PATH/source/Delegate.mc $COMPLETE_PATH/source/${APP_PREFIXE}Delegat
 UUID=$(uuidgen | tr '[:upper:]' '[:lower:]' | tr -d '-')
 
 # UPDATE manifest.xml
-xml ed --inplace -u "/iq:manifest/iq:application/@id" -v ${UUID} ${COMPLETE_PATH}/manifest.xml 
-xml ed --inplace -u "/iq:manifest/iq:application/@type" -v 'watch-app' ${COMPLETE_PATH}/manifest.xml
-xml ed --inplace -u "/iq:manifest/iq:application/@name" -v '@Strings.AppName' ${COMPLETE_PATH}/manifest.xml
-xml ed --inplace -u "/iq:manifest/iq:application/@launcherIcon" -v '@Drawables.LauncherIcon' ${COMPLETE_PATH}/manifest.xml
-xml ed --inplace -u "/iq:manifest/iq:application/@entry" -v ${APP_ENTRY} ${COMPLETE_PATH}/manifest.xml
-xml ed --inplace -u "/iq:manifest/iq:application/@minSdkVersion" -v ${MIN_SDK} ${COMPLETE_PATH}/manifest.xml
+upman(){ xml ed --inplace $@ ${COMPLETE_PATH}/manifest.xml; }
+upman -u "/iq:manifest/iq:application/@id" -v ${UUID}
+upman -u "/iq:manifest/iq:application/@type" -v 'watch-app'
+upman -u "/iq:manifest/iq:application/@name" -v '@Strings.AppName' 
+upman -u "/iq:manifest/iq:application/@launcherIcon" -v '@Drawables.LauncherIcon'
+upman -u "/iq:manifest/iq:application/@entry" -v ${APP_ENTRY} 
+upman -u "/iq:manifest/iq:application/@minSdkVersion" -v ${MIN_SDK} 
+upman -s "/iq:manifest/iq:application/iq:products" -t elem -n iq:product -v '""'
+upman -i '/iq:manifest/*/iq:products/*' -t attr -n id -v "$DEVICE"
+
+
 
 # UPDATE source files
 # APP
@@ -90,17 +100,17 @@ sed -i -e "s!\${menuDelegateClassName}!$APP_MENU_DELEGATE!g" ${COMPLETE_PATH}/so
 # UPDATE resources
 sed -i -e "s!\${appName}!$APP_NAME!g" ${COMPLETE_PATH}/resources/strings/strings.xml
 
-# ADD BUILD/RUN
-SOURCE="${BASH_SOURCE[0]}"
-RDIR="$( dirname "$SOURCE" )"
-cp $RDIR/build.sh ${COMPLETE_PATH}
-cp $RDIR/run.sh ${COMPLETE_PATH}
+# ADD Makefile
+RDIR="$(dirname "$0")"
+echo "
+DEVELOPER_KEY:=$DEVELOPER_KEY
+DEVICE:=$DEVICE" > ${COMPLETE_PATH}/Makefile
+cat Makefile >> ${COMPLETE_PATH}/Makefile
 
-# UPDATE BUILD/RUN
-sed -i -e "s!\${AppName}!$APP_NAME!g" ${COMPLETE_PATH}/build.sh
-sed -i -e "s!\${AppName}!$APP_NAME!g" ${COMPLETE_PATH}/run.sh
 
 # CLEAN
 rm -f ${COMPLETE_PATH}/*.sh-e ${COMPLETE_PATH}/resources/strings/*.xml-e ${COMPLETE_PATH}/source/*.mc-e
 
-monkeyc -o ${COMPLETE_PATH}/${APP_NAME}.prg -d ${DEVICE} -m ${COMPLETE_PATH}/manifest.xml -z ${RESOURCE_PATH} ${COMPLETE_PATH}/source/*.mc -w -y ${DEVELOPER_KEY}
+#monkeyc -o ${COMPLETE_PATH}/${APP_NAME}.prg -d ${DEVICE} -m ${COMPLETE_PATH}/manifest.xml -z ${RESOURCE_PATH} ${COMPLETE_PATH}/source/*.mc -w -y ${DEVELOPER_KEY}
+cd $COMPLETE_PATH
+make
